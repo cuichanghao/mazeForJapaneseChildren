@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>迷路ジェネレーター</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #fff;
+      color: #222;
+      font-family: 'Segoe UI', sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 24px 16px;
+    }
+
+    h1 {
+      font-size: 1.8rem;
+      margin-bottom: 20px;
+      color: #222;
+      letter-spacing: 0.05em;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+    }
+
+    label {
+      font-size: 0.9rem;
+      color: #444;
+    }
+
+    select, input[type=range] {
+      background: #f5f5f5;
+      color: #222;
+      border: 1px solid #bbb;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+
+    .size-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #sizeValue {
+      min-width: 30px;
+      text-align: center;
+      color: #222;
+      font-weight: bold;
+    }
+
+    button {
+      background: #fff;
+      color: #222;
+      border: 1px solid #888;
+      border-radius: 8px;
+      padding: 8px 20px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+
+    button:hover { background: #eee; }
+    button:active { transform: scale(0.97); }
+    button.active { background: #e8f5e9; border-color: #388e3c; color: #388e3c; }
+
+    #canvas-container {
+      position: relative;
+      border: 2px solid #bbb;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    canvas { display: block; }
+
+    #overlayCanvas {
+      position: absolute;
+      top: 0; left: 0;
+      touch-action: none;
+    }
+
+    .legend {
+      margin-top: 14px;
+      display: flex;
+      gap: 20px;
+      font-size: 0.8rem;
+      color: #555;
+    }
+
+    .legend span {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .dot.start { background: #4ecb8d; }
+    .dot.goal  { background: #e94560; }
+    .dot.path  { background: #f5a623; }
+    .dot.trail { background: rgba(220,30,30,0.5); }
+
+    #status {
+      margin-top: 10px;
+      font-size: 0.85rem;
+      color: #555;
+      min-height: 1.2em;
+    }
+
+    ruby { ruby-align: center; }
+    rt {
+      font-size: 0.55em;
+      color: #555;
+      letter-spacing: 0.02em;
+    }
+  </style>
+</head>
+<body>
+  <h1>けいえんの<ruby>迷路<rt>めいろ</rt></ruby>ジェネレーター</h1>
+
+  <div class="controls">
+    <div class="size-control">
+      <label for="sizeSlider">サイズ:</label>
+      <input type="range" id="sizeSlider" min="5" max="40" value="15" step="1">
+      <span id="sizeValue">15</span>
+    </div>
+    <div class="size-control">
+      <label for="difficultySelect"><ruby>難易度<rt>なんいど</rt></ruby>:</label>
+      <select id="difficultySelect">
+        <option value="easy">かんたん</option>
+        <option value="normal" selected>ふつう</option>
+        <option value="hard">むずかしい</option>
+      </select>
+    </div>
+    <button id="generateBtn"><ruby>生成<rt>せいせい</rt></ruby></button>
+    <button id="solveBtn"><ruby>解<rt>と</rt></ruby>く</button>
+  </div>
+
+  <div id="canvas-container">
+    <canvas id="mazeCanvas"></canvas>
+    <canvas id="overlayCanvas"></canvas>
+  </div>
+
+  <div class="legend">
+    <span><span class="dot start"></span>スタート</span>
+    <span><span class="dot goal"></span>ゴール</span>
+    <span><span class="dot path"></span><ruby>解答経路<rt>かいとうけいろ</rt></ruby></span>
+    <span><span class="dot trail"></span>ボールの<ruby>軌跡<rt>きせき</rt></ruby></span>
+  </div>
+
+  <div id="status"></div>
+
+  <script>
+    const canvas  = document.getElementById('mazeCanvas');
+    const ctx     = canvas.getContext('2d');
+    const overlay = document.getElementById('overlayCanvas');
+    const octx    = overlay.getContext('2d');
+
+    const sizeSlider       = document.getElementById('sizeSlider');
+    const sizeValueEl      = document.getElementById('sizeValue');
+    const difficultySelect = document.getElementById('difficultySelect');
+    const generateBtn      = document.getElementById('generateBtn');
+    const solveBtn         = document.getElementById('solveBtn');
+    const statusEl         = document.getElementById('status');
+
+    const CELL = 22;
+    const WALL = 2;
+
+    let rows, cols, cells, solved = false, solvePath = [];
+
+    // ── ボール状態 ────────────────────────────────────────────────────
+    let ballR = 0, ballC = 0;
+    let ballPath = [];   // 通過したセルidxの配列（スタック）
+
+    function makeCell(r, c) {
+      return { r, c, visited: false, walls: { N: true, S: true, E: true, W: true } };
+    }
+    function idx(r, c) { return r * cols + c; }
+
+    // ── 迷路生成 ──────────────────────────────────────────────────────
+    function generate() {
+      solved = false;
+      solvePath = [];
+      solveBtn.classList.remove('active');
+      solveBtn.textContent = '解く';
+
+      const difficulty = difficultySelect.value;
+      rows = parseInt(sizeSlider.value);
+      cols = parseInt(sizeSlider.value);
+
+      canvas.width  = overlay.width  = cols * CELL + WALL;
+      canvas.height = overlay.height = rows * CELL + WALL;
+
+      cells = Array.from({ length: rows * cols }, (_, i) =>
+        makeCell(Math.floor(i / cols), i % cols)
+      );
+
+      const DR  = { N: -1, S: 1, E: 0, W: 0 };
+      const DC  = { N: 0, S: 0, E: 1, W: -1 };
+      const OPP = { N: 'S', S: 'N', E: 'W', W: 'E' };
+      const DIRS = ['N', 'S', 'E', 'W'];
+
+      if (difficulty === 'hard') {
+        // ── Prim法: 分岐が多く行き止まりが豊富な迷路 ────────────────
+        const inMaze = new Array(rows * cols).fill(false);
+        const frontier = new Set();
+
+        const addFrontier = (r, c) => {
+          if (r >= 0 && r < rows && c >= 0 && c < cols && !inMaze[idx(r, c)])
+            frontier.add(idx(r, c));
+        };
+
+        inMaze[idx(0, 0)] = true;
+        cells[idx(0, 0)].visited = true;
+        DIRS.forEach(d => addFrontier(0 + DR[d], 0 + DC[d]));
+
+        while (frontier.size > 0) {
+          const arr = Array.from(frontier);
+          const cellIdx = arr[Math.floor(Math.random() * arr.length)];
+          frontier.delete(cellIdx);
+          const cell = cells[cellIdx];
+
+          const mazeNeighbors = DIRS.filter(d => {
+            const nr = cell.r + DR[d], nc = cell.c + DC[d];
+            return nr >= 0 && nr < rows && nc >= 0 && nc < cols && inMaze[idx(nr, nc)];
+          });
+          if (!mazeNeighbors.length) continue;
+
+          const d = mazeNeighbors[Math.floor(Math.random() * mazeNeighbors.length)];
+          cell.walls[d] = false;
+          cells[idx(cell.r + DR[d], cell.c + DC[d])].walls[OPP[d]] = false;
+          inMaze[cellIdx] = true;
+          cell.visited = true;
+
+          DIRS.forEach(nd => addFrontier(cell.r + DR[nd], cell.c + DC[nd]));
+        }
+
+      } else {
+        // ── DFS法 (ふつう / かんたん) ─────────────────────────────────
+        const stack = [];
+        const start = cells[idx(0, 0)];
+        start.visited = true;
+        stack.push(start);
+
+        while (stack.length) {
+          const cur = stack[stack.length - 1];
+          const dirs = DIRS.filter(d => {
+            const nr = cur.r + DR[d], nc = cur.c + DC[d];
+            return nr >= 0 && nr < rows && nc >= 0 && nc < cols && !cells[idx(nr, nc)].visited;
+          });
+          if (dirs.length === 0) { stack.pop(); continue; }
+          const d = dirs[Math.floor(Math.random() * dirs.length)];
+          cur.walls[d] = false;
+          const next = cells[idx(cur.r + DR[d], cur.c + DC[d])];
+          next.walls[OPP[d]] = false;
+          next.visited = true;
+          stack.push(next);
+        }
+      }
+
+      // ボールをスタートに戻す
+      ballR = 0; ballC = 0;
+      ballPath = [idx(0, 0)];
+
+      draw();
+      drawOverlay();
+      const label = { easy: 'かんたん', normal: 'ふつう', hard: 'むずかしい' }[difficulty];
+      statusEl.textContent = `なんいど: ${label}`;
+    }
+
+    // ── BFS solver ────────────────────────────────────────────────────
+    function solve() {
+      if (solved) {
+        solved = false;
+        solvePath = [];
+        solveBtn.classList.remove('active');
+        solveBtn.textContent = '解く';
+        draw();
+        drawOverlay();
+        statusEl.textContent = '';
+        return;
+      }
+
+      const DR = { N: -1, S: 1, E: 0, W: 0 };
+      const DC = { N: 0, S: 0, E: 1, W: -1 };
+      const visited = new Array(rows * cols).fill(false);
+      const prev    = new Array(rows * cols).fill(-1);
+      const queue   = [0];
+      visited[0] = true;
+      const goal = idx(rows - 1, cols - 1);
+
+      outer: while (queue.length) {
+        const ci = queue.shift();
+        const cell = cells[ci];
+        for (const d of ['N', 'S', 'E', 'W']) {
+          if (cell.walls[d]) continue;
+          const ni = idx(cell.r + DR[d], cell.c + DC[d]);
+          if (!visited[ni]) {
+            visited[ni] = true;
+            prev[ni] = ci;
+            if (ni === goal) break outer;
+            queue.push(ni);
+          }
+        }
+      }
+
+      solvePath = [];
+      for (let i = goal; i !== -1; i = prev[i]) solvePath.unshift(i);
+
+      solved = true;
+      solveBtn.classList.add('active');
+      solveBtn.textContent = '解答非表示';
+      draw();
+      drawOverlay();
+      statusEl.textContent = `こたえのながさ: ${solvePath.length} マス`;
+    }
+
+    // ── 迷路描画 ──────────────────────────────────────────────────────
+    function draw() {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      if (solved && solvePath.length) {
+        for (const ci of solvePath) {
+          const cell = cells[ci];
+          ctx.fillStyle = 'rgba(245,166,35,0.4)';
+          ctx.fillRect(cell.c * CELL + WALL, cell.r * CELL + WALL, CELL - WALL, CELL - WALL);
+        }
+      }
+
+      ctx.fillStyle = 'rgba(78,203,141,0.5)';
+      ctx.fillRect(WALL, WALL, CELL - WALL, CELL - WALL);
+      ctx.fillStyle = 'rgba(233,69,96,0.5)';
+      ctx.fillRect((cols - 1) * CELL + WALL, (rows - 1) * CELL + WALL, CELL - WALL, CELL - WALL);
+
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth   = WALL;
+      ctx.lineCap     = 'square';
+
+      for (const cell of cells) {
+        const x = cell.c * CELL;
+        const y = cell.r * CELL;
+        ctx.beginPath();
+        if (cell.walls.N) { ctx.moveTo(x, y);        ctx.lineTo(x + CELL, y); }
+        if (cell.walls.S) { ctx.moveTo(x, y + CELL); ctx.lineTo(x + CELL, y + CELL); }
+        if (cell.walls.W) { ctx.moveTo(x, y);        ctx.lineTo(x, y + CELL); }
+        if (cell.walls.E) { ctx.moveTo(x + CELL, y); ctx.lineTo(x + CELL, y + CELL); }
+        ctx.stroke();
+      }
+
+      drawMarker(0, 0, '#4ecb8d', 'S');
+      drawMarker(rows - 1, cols - 1, '#e94560', 'G');
+    }
+
+    function drawMarker(r, c, color, label) {
+      const cx = c * CELL + CELL / 2;
+      const cy = r * CELL + CELL / 2;
+      octx.beginPath();
+      octx.arc(cx, cy, CELL * 0.28, 0, Math.PI * 2);
+      octx.fillStyle = color;
+      octx.fill();
+      if (CELL >= 18) {
+        octx.fillStyle = '#000';
+        octx.font = `bold ${Math.floor(CELL * 0.35)}px sans-serif`;
+        octx.textAlign = 'center';
+        octx.textBaseline = 'middle';
+        octx.fillText(label, cx, cy);
+      }
+    }
+
+    // ── オーバーレイ描画（軌跡＋ボール） ─────────────────────────────
+    function drawOverlay() {
+      octx.clearRect(0, 0, overlay.width, overlay.height);
+
+      // 軌跡（赤い連続線）
+      if (ballPath.length >= 2) {
+        octx.beginPath();
+        for (let i = 0; i < ballPath.length; i++) {
+          const cell = cells[ballPath[i]];
+          const cx = cell.c * CELL + CELL / 2;
+          const cy = cell.r * CELL + CELL / 2;
+          if (i === 0) octx.moveTo(cx, cy);
+          else         octx.lineTo(cx, cy);
+        }
+        octx.strokeStyle = 'rgba(220, 30, 30, 0.85)';
+        octx.lineWidth   = Math.max(2, CELL * 0.18);
+        octx.lineCap     = 'round';
+        octx.lineJoin    = 'round';
+        octx.stroke();
+      }
+
+      // S / G マーカー
+      drawMarker(0, 0, '#4ecb8d', 'S');
+      drawMarker(rows - 1, cols - 1, '#e94560', 'G');
+
+      // ボール
+      const bx = ballC * CELL + CELL / 2;
+      const by = ballR * CELL + CELL / 2;
+      const br = CELL * 0.32;
+
+      octx.beginPath();
+      octx.arc(bx, by, br, 0, Math.PI * 2);
+      const grad = octx.createRadialGradient(bx - br * 0.3, by - br * 0.3, br * 0.1, bx, by, br);
+      grad.addColorStop(0, '#ff6666');
+      grad.addColorStop(1, '#aa0000');
+      octx.fillStyle = grad;
+      octx.fill();
+      octx.strokeStyle = '#800000';
+      octx.lineWidth = 1;
+      octx.stroke();
+    }
+
+    // ── ボール移動ロジック ─────────────────────────────────────────────
+    const DIR_MAP = [
+      { dr: -1, dc: 0, wall: 'N' },
+      { dr:  1, dc: 0, wall: 'S' },
+      { dr:  0, dc: 1, wall: 'E' },
+      { dr:  0, dc:-1, wall: 'W' },
+    ];
+
+    // 現在のボールセルから隣接セル(toR,toC)に壁がなければ移動
+    function tryMoveBall(toR, toC) {
+      if (toR < 0 || toR >= rows || toC < 0 || toC >= cols) return false;
+      const dr = toR - ballR, dc = toC - ballC;
+      const dir = DIR_MAP.find(d => d.dr === dr && d.dc === dc);
+      if (!dir) return false;
+      if (cells[idx(ballR, ballC)].walls[dir.wall]) return false;
+
+      const ni = idx(toR, toC);
+
+      // 戻る場合: パスを巻き戻す
+      const prevIdx = ballPath.indexOf(ni);
+      if (prevIdx !== -1) {
+        ballPath = ballPath.slice(0, prevIdx + 1);
+      } else {
+        ballPath.push(ni);
+      }
+
+      ballR = toR;
+      ballC = toC;
+      drawOverlay();
+
+      // ゴール判定
+      if (ballR === rows - 1 && ballC === cols - 1) {
+        statusEl.textContent = 'ゴール！おめでとう!';
+      }
+      return true;
+    }
+
+    // ── タッチ・マウス入力 ────────────────────────────────────────────
+    // ボールの中心から指の位置への方向で移動判定する方式
+    // → 速く動かしてもセルをスキップしない
+
+    function clientToCanvas(clientX, clientY) {
+      const rect   = overlay.getBoundingClientRect();
+      const scaleX = overlay.width  / rect.width;
+      const scaleY = overlay.height / rect.height;
+      return {
+        x: (clientX - rect.left) * scaleX,
+        y: (clientY - rect.top)  * scaleY,
+      };
+    }
+
+    function handleMove(clientX, clientY) {
+      const { x, y } = clientToCanvas(clientX, clientY);
+      // ボールの中心座標
+      const bx = ballC * CELL + CELL / 2;
+      const by = ballR * CELL + CELL / 2;
+      const dx = x - bx;
+      const dy = y - by;
+      // しきい値: セルの45%分だけ離れたら移動
+      const threshold = CELL * 0.45;
+      if (Math.abs(dx) < threshold && Math.abs(dy) < threshold) return;
+      // 縦横で大きい方向に1マス移動
+      if (Math.abs(dx) >= Math.abs(dy)) {
+        tryMoveBall(ballR, ballC + (dx > 0 ? 1 : -1));
+      } else {
+        tryMoveBall(ballR + (dy > 0 ? 1 : -1), ballC);
+      }
+    }
+
+    overlay.addEventListener('touchstart', e => {
+      e.preventDefault();
+    }, { passive: false });
+
+    overlay.addEventListener('touchmove', e => {
+      e.preventDefault();
+      handleMove(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: false });
+
+    overlay.addEventListener('mousemove', e => {
+      if (e.buttons !== 1) return;
+      handleMove(e.clientX, e.clientY);
+    });
+
+    overlay.addEventListener('mousedown', e => {
+      handleMove(e.clientX, e.clientY);
+    });
+
+    // ── イベント ──────────────────────────────────────────────────────
+    sizeSlider.addEventListener('input', () => {
+      sizeValueEl.textContent = sizeSlider.value;
+    });
+
+    generateBtn.addEventListener('click', () => {
+      if (cells && ballPath.length > 1) {
+        if (!confirm('あたらしい迷路（めいろ）をつくると、いまのきろくが消（き）えるよ。\nつくりなおす？')) return;
+      }
+      generate();
+    });
+    solveBtn.addEventListener('click', solve);
+
+    generate();
+  </script>
+</body>
+</html>
